@@ -1,0 +1,18 @@
+<html>
+<body>
+  <img src="/static/logo.png">
+  <div onclick="submitOrder()" class="btn">Pay now</div>
+  <form id="pay">
+    <input type="text" name="card_number" placeholder="Card number">
+    <input type="text" name="cvv" placeholder="CVV">
+    <input type="text" name="expiry">
+  </form>
+  <script>
+    function submitOrder() {
+      var params = new URLSearchParams(location.search);
+      document.getElementById("pay").innerHTML += "<p>Thanks " + params.get("name") + "</p>";
+      localStorage.setItem("card", document.querySelector("[name=card_number]").value);
+    }
+  </script>
+</body>
+</html>
