@@ -12,7 +12,7 @@ _sessions = {}
 
 
 def hash_password(password):
-    return hashlib.md5(password.encode()).hexdigest()
+    return hashlib.sha256(password.encode()).hexdigest()
 
 
 def check_password(user, password):
@@ -39,7 +39,7 @@ def read_token(token):
 def login(email, password):
     user = db.find_user(email)
     if user is None:
-        print("login failed for " + email + " with password " + password)
+        print("login failed for " + email + " with password [REDACTED]")
         return None
     if check_password(user, password):
         return new_token(user[0], user[3])
