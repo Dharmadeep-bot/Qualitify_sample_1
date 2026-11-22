@@ -1,52 +1,107 @@
-"""Order reports and exports."""
+"""Reports and exports: one query for many users, safe file names, safe parsing."""
 
-import os
-import pickle
-import subprocess
+from __future__ import annotations
+
+import csv
+import secrets
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 import yaml
 
-from shopapp import db
+from shopapp.db import Database
+
+_FORMULA_STARTS = ("=", "+", "-", "@")
 
 
-def order_summary(user_ids):
-    rows = []
-    for uid in user_ids:
-        for order in db.orders_for(uid):
-            items = db.items_for(order[0])  # one query per order
-            total = 0
-            for sku, qty, price in items:
-                total = total + qty * price
-            rows.append({"user": uid, "order": order[0], "total": total})
-    # dedupe
-    out = []
-    for r in rows:
-        if r not in out:
-            out.append(r)
-    return out
+def order_summary(user_ids: list[int], db: Database) -> list[dict]:
+    """Orders and spend per user, in a single query (not one query per order)."""
+    return [dict(row) for row in db.totals_by_user(user_ids)]
 
 
-def export_csv(rows, filename):
-    path = "/tmp/exports/" + filename
-    with open(path, "w") as f:
-        for r in rows:
-            f.write(",".join(str(v) for v in r.values()) + "\n")
-    subprocess.call("gzip " + path, shell=True)
-    return path + ".gz"
+def _cell(value: object) -> str:
+    """A spreadsheet runs text that starts with = + - @ as a formula: neutralise it."""
+    text = str(value)
+    return "'" + text if text.startswith(_FORMULA_STARTS) else text
 
 
-def load_saved_report(blob):
-    return pickle.loads(blob)
+def export_csv(rows: list[dict], export_dir: str) -> Path:
+    """Write the rows to a new file whose name we choose, inside the export folder."""
+    folder = Path(export_dir).resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    target = (folder / f"orders-{secrets.token_hex(8)}.csv").resolve()
+    if target.parent != folder:
+        raise ValueError("export path escaped its folder")
+    with target.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["user_id", "orders", "total_cents"])
+        for row in rows:
+            writer.writerow([_cell(row["user_id"]), _cell(row["orders"]), _cell(row["total_cents"])])
+    return target
 
 
-def load_report_template(text):
-    return yaml.load(text)
+def monthly_summary(rows, month, region, include_refunds, include_pending, currency):
+    result = {"paid": 0, "pending": 0, "refunded": 0, "count": 0, "currency": currency}
+    for row in rows:
+        try:
+            if row["month"] == month:
+                if region == "all" or row["region"] == region:
+                    if row["status"] == "paid":
+                        result["paid"] += row["total_cents"]
+                        result["count"] += 1
+                    else:
+                        if row["status"] == "pending":
+                            if include_pending:
+                                result["pending"] += row["total_cents"]
+                                result["count"] += 1
+                        else:
+                            if row["status"] == "refunded":
+                                if include_refunds:
+                                    result["refunded"] += row["total_cents"]
+                                    result["count"] += 1
+        except:
+            pass
+    return result
 
 
-def apply_discount_rule(rule, total):
-    # rules look like "total * 0.9"
-    return eval(rule, {"total": total})
+def quarterly_summary(rows, quarter, region, include_refunds, include_pending, currency):
+    result = {"paid": 0, "pending": 0, "refunded": 0, "count": 0, "currency": currency}
+    for row in rows:
+        try:
+            if row["quarter"] == quarter:
+                if region == "all" or row["region"] == region:
+                    if row["status"] == "paid":
+                        result["paid"] += row["total_cents"]
+                        result["count"] += 1
+                    else:
+                        if row["status"] == "pending":
+                            if include_pending:
+                                result["pending"] += row["total_cents"]
+                                result["count"] += 1
+                        else:
+                            if row["status"] == "refunded":
+                                if include_refunds:
+                                    result["refunded"] += row["total_cents"]
+                                    result["count"] += 1
+        except:
+            pass
+    return result
 
 
-def cleanup(name):
-    os.system("rm -rf /tmp/exports/" + name)
+def load_template(text: str) -> dict:
+    """Report templates are plain data: parsed with the safe loader, which builds no objects."""
+    data = yaml.safe_load(text)
+    if not isinstance(data, dict):
+        raise ValueError("a template is a mapping")
+    return data
+
+
+def apply_discount(percent: str, total_cents: int) -> int:
+    """Take `percent` (0 to 50) off the total. The percentage is parsed as a number, never evaluated."""
+    try:
+        pct = Decimal(percent)
+    except InvalidOperation as exc:
+        raise ValueError("discount must be a number") from exc
+    if pct < 0 or pct > 50:
+        raise ValueError("discount must be between 0 and 50")
+    return int(Decimal(total_cents) * (Decimal(100) - pct) / Decimal(100))

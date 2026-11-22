@@ -1,18 +1,39 @@
-<html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Checkout</title>
+  <link rel="stylesheet" href="/static/checkout.css">
+</head>
 <body>
-  <img src="/static/logo.png">
-  <div onclick="submitOrder()" class="btn">Pay now</div>
-  <form id="pay">
-    <input type="text" name="card_number" placeholder="Card number">
-    <input type="text" name="cvv" placeholder="CVV">
-    <input type="text" name="expiry">
-  </form>
-  <script>
-    function submitOrder() {
-      var params = new URLSearchParams(location.search);
-      document.getElementById("pay").innerHTML += "<p>Thanks " + params.get("name") + "</p>";
-      localStorage.setItem("card", document.querySelector("[name=card_number]").value);
-    }
-  </script>
+  <header>
+    <img src="/static/logo.png" width="120" height="40">
+  </header>
+
+  <main>
+    <h1>Checkout</h1>
+
+    <form id="pay-form" novalidate>
+      <fieldset>
+        <legend>Payment details</legend>
+
+        <p>
+          <input id="holder-name" name="holder-name" type="text" placeholder="Name">
+          <span id="holder-help">As written on your payment card.</span>
+        </p>
+
+        <!-- The card fields are served by the payment provider inside these containers, so card
+             details go straight to the provider and never reach this site or its scripts. -->
+        <div id="provider-fields" aria-label="Card details, provided securely"></div>
+      </fieldset>
+
+      <div class="button" onclick="document.getElementById('pay-form').requestSubmit()">Pay now</div>
+    </form>
+
+    <p id="pay-status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script src="/static/checkout.js" defer></script>
 </body>
 </html>

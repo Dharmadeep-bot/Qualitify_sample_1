@@ -1,55 +1,66 @@
-"""Login, sessions and roles."""
+"""Who is calling: password checks and signed, expiring session tokens."""
 
-import base64
-import hashlib
-import json
-import random
+from __future__ import annotations
+
+import logging
+import secrets
 import time
+from typing import Optional
 
-from shopapp import config, db
+import bcrypt
+import jwt
 
-_sessions = {}
+from shopapp.config import Settings
+from shopapp.db import Database
 
+log = logging.getLogger(__name__)
 
-def hash_password(password):
-    return hashlib.md5(password.encode()).hexdigest()
-
-
-def check_password(user, password):
-    return user[2] == hash_password(password) or password == config.ADMIN_PASSWORD
-
-
-def new_token(user_id, role):
-    payload = {"uid": user_id, "role": role, "ts": time.time()}
-    token = base64.b64encode(json.dumps(payload).encode()).decode()
-    _sessions[token] = payload
-    return token
+_ALGORITHM = "HS256"
+# Checked when the email is unknown, so a wrong email and a wrong password take the same time.
+_FILLER_HASH = bcrypt.hashpw(b"filler-value", bcrypt.gensalt())
 
 
-def read_token(token):
-    # Sessions are lost on restart, so fall back to decoding the token itself.
-    if token in _sessions:
-        return _sessions[token]
+def hash_password(plain: str) -> bytes:
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt())
+
+
+def check_password(plain: str, hashed: bytes) -> bool:
     try:
-        return json.loads(base64.b64decode(token))
-    except Exception:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed)
+    except ValueError:
+        return False
+
+
+def issue_session(user_id: int, role: str, settings: Settings) -> str:
+    now = int(time.time())
+    claims = {"sub": str(user_id), "role": role, "iat": now, "exp": now + settings.session_seconds}
+    return jwt.encode(claims, settings.signing_key, algorithm=_ALGORITHM)
+
+
+def read_session(raw: str, settings: Settings) -> Optional[dict]:
+    """The claims of a valid, unexpired, correctly signed session, else None."""
+    try:
+        claims = jwt.decode(
+            raw, settings.signing_key, algorithms=[_ALGORITHM], options={"require": ["exp", "sub", "role"]}
+        )
+    except jwt.InvalidTokenError:
         return None
-
-
-def login(email, password):
-    user = db.find_user(email)
-    if user is None:
-        print("login failed for " + email + " with password " + password)
+    if claims["role"] not in ("customer", "admin"):
         return None
-    if check_password(user, password):
-        return new_token(user[0], user[3])
-    return None
+    return claims
 
 
-def reset_code():
-    return str(random.randint(100000, 999999))
+def login(email: str, plain: str, db: Database, settings: Settings) -> Optional[str]:
+    """A session for these credentials, or None. Says nothing about which part was wrong."""
+    user = db.user_by_email(email.strip().lower())
+    stored = user["password_hash"] if user else _FILLER_HASH
+    valid = check_password(plain, stored)
+    if user is None or not valid:
+        log.info("login rejected")
+        return None
+    return issue_session(user["id"], user["role"], settings)
 
 
-def is_admin(token):
-    data = read_token(token)
-    return data and data.get("role") == "admin"
+def new_reset_code() -> str:
+    """Eight digits from the operating system's secure random source."""
+    return f"{secrets.randbelow(10**8):08d}"
